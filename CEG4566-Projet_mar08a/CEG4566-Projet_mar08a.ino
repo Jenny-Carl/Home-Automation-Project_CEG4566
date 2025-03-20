@@ -14,111 +14,194 @@
   which are called when their values are changed from the Dashboard.
   These functions are generated with the Thing and added at the end of this sketch.
 */
-
-#include "thingProperties.h"
+#include <Wire.h>
+#include <Update.h>
 #include <DHT.h>
+#include <WiFi.h>
+//#include <ArduinoIoTCloud.h>
 #include <Adafruit_SSD1306.h>
+#include <Arduino_ConnectionHandler.h>
+#include "thingProperties.h"
+#include "arduino_secrets.h"
 
+#undef ERROR
+#include <SparkFun_APDS9960.h>
+// Configuration matérielle
 #define DHTPIN 33
-#define DHTType DHT11
-#define OLED_ADDRESS 0x3C
+#define DHTTYPE DHT11
+#define LED_PIN 5
 #define SDA_PIN 21
 #define SCL_PIN 22
 
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+/* Setting OLED display parameters */
+#define OLED_WIDTH 128          // OLED display width, in pixels
+#define OLED_HEIGHT 64          // OLED display height, in pixels
+#define OLED_ADDRESS 0x3C       // i2c address for OLED display
+#define OLED_RESET 4 
 
-DHT dht(DHTPIN, DHTType);
+// Objets capteurs
+DHT dht(DHTPIN, DHTTYPE);
+SparkFun_APDS9960 gestureSensor;
+Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
 
-int Pin_Led = 5;
+// Variables partagées
+volatile bool ledState = false;
+//float temperature = 0.0;
+//float humidity = 0.0;
 
-// FreeRTOS
-TaskHandle_t sensorTaskHandle = NULL;
-TaskHandle_t cloudTaskHandle = NULL;
-SemaphoreHandle_t gpioMutex = NULL;
-SemaphoreHandle_t tempHumidityMutex = xSemaphoreCreateMutex();
+// Sémaphores
+SemaphoreHandle_t i2cMutex;
+SemaphoreHandle_t ledMutex;
+SemaphoreHandle_t serialMutex;
+
+void dhtTask(void *pvParameters);
+void gestureTask(void *pvParameters);
+
+/* Status for OLED display indicators */
+bool LEDStatus = false;
+
 
 void setup() {
   Serial.begin(115200);
-  delay(1500);
-
-  initProperties();
-  pinMode(Pin_Led, OUTPUT);
+  
+  // Initialisation I2C
+  Wire.begin(SDA_PIN, SCL_PIN);
+  
+  // Initialisation capteurs
   dht.begin();
+  pinMode(LED_PIN, OUTPUT);
 
-  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
-  ArduinoCloud.printDebugInfo();
+  // Initialisation OLED
+  display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS); 
 
-  // Initialisation écran OLED
-  //display.init();
-  //display.flipScreenVertically();
-  //display.setFont(ArialMT_Plain_20); // Police incluse dans la bibliothèque
-
-  xTaskCreate(sensorTask, "SensorTask", 2048, NULL, 1, &sensorTaskHandle);
-  gpioMutex = xSemaphoreCreateMutex();
-  xTaskCreate(cloudTask, "CloudTask", 8192, NULL, 2, &cloudTaskHandle);
-
+  /* OLED display at start */
   introDisplay();
+
+  // Création des sémaphores
+  i2cMutex = xSemaphoreCreateMutex();
+  ledMutex = xSemaphoreCreateMutex();
+  serialMutex = xSemaphoreCreateMutex();
+
+  // Configuration capteur de gestes
+  if(xSemaphoreTake(i2cMutex, portMAX_DELAY)) {
+    if(!gestureSensor.init() || !gestureSensor.enableGestureSensor(true)) {
+      Serial.println("ERREUR: Init capteur gestes");
+      while(1);
+    }
+    gestureSensor.setGestureLEDDrive(LED_DRIVE_100MA);
+    gestureSensor.setGestureGain(GGAIN_4X);
+    xSemaphoreGive(i2cMutex);
+  }
+
+  // Création des tâches
+  xTaskCreatePinnedToCore(
+    dhtTask,
+    "DHT_Task",
+    2048,
+    NULL,
+    1,
+    NULL,
+    APP_CPU_NUM
+  );
+
+  xTaskCreatePinnedToCore(
+    gestureTask,
+    "Gesture_Task",
+    2048,
+    NULL,
+    2,
+    NULL,
+    PRO_CPU_NUM
+  );
+
+  // Suppression de la tâche loop
+  vTaskDelete(NULL);
 }
 
 void loop() {
-  // Empty - all work is done in FreeRTOS tasks
-  // You can add a delay to reduce CPU usage
-  delay(1000);
+  // Non utilisé
 }
 
-// Sensor Task: Reads DHT11 sensor data every 2 seconds
-void sensorTask(void *pvParameters) {
-  for (;;) {
-    float t = dht.readTemperature();
+// Tâches ---------------------------------------------------------------------
+
+void dhtTask(void *pvParameters) {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  
+  for(;;) {
     float h = dht.readHumidity();
-    
-    if (!isnan(t) && !isnan(h)) { // Check for valid readings
-      if(xSemaphoreTake(tempHumidityMutex, pdMS_TO_TICKS(100))) {
+    float t = dht.readTemperature();
+
+    if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+      if(!isnan(h) && !isnan(t)) {
         temperature = t;
         humidity = h;
-        xSemaphoreGive(tempHumidityMutex);
+        Serial.printf("[DHT] Temp: %.1fC Hum: %.1f%%\n", t, h);
+      } else {
+        Serial.println("[DHT] Erreur lecture");
       }
-    } else {
-      Serial.println("DHT Read Error!");
+      xSemaphoreGive(serialMutex);
     }
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    /* Print temperature and humidity values on serial monitor */
-    Serial.print("Temperature: "); 
-    Serial.print(t); 
-    Serial.println(" °C"); 
-    Serial.print("Humidity: "); 
-    Serial.print(h); 
-    Serial.println(" %"); 
+    
+    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(2000));
   }
 }
 
-// Cloud Task: Handles IoT Cloud communication
-void cloudTask(void *pvParameters) {
-  for (;;) {
-    ArduinoCloud.update();
-    vTaskDelay(pdMS_TO_TICKS(500)); // More stable interval
-  }
-}
+void gestureTask(void *pvParameters) {
+  uint8_t gesture = 0;
+  
+  for(;;) {
+    if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50))) {
+      if(gestureSensor.isGestureAvailable()) {
+        gesture = gestureSensor.readGesture();
+        xSemaphoreGive(i2cMutex);
+        
+        if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+          switch(gesture) {
+            case DIR_UP:
+              Serial.println("↑ Geste haut");
+              break;
+              
+            case DIR_DOWN:
+              Serial.println("↓ Geste bas");
+              break;
+              
+            case DIR_LEFT:
+              if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
+                digitalWrite(LED_PIN, LOW);
+                ledState = false;
+                Serial.println("← LED OFF");
+                xSemaphoreGive(ledMutex);
+              }
+              break;
+              
+            case DIR_RIGHT:
+              if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
+                digitalWrite(LED_PIN, HIGH);
+                ledState = true;
+                Serial.println("→ LED ON");
+                xSemaphoreGive(ledMutex);
+              }
+              break;
 
-/*
-  Since RedLight1 is READ_WRITE variable, onRedLight1Change() is
-  executed every time a new value is received from IoT Cloud.
-*/
-void onRedLight1Change() {
-  if(xSemaphoreTake(gpioMutex, pdMS_TO_TICKS(100))) {
-      Serial.printf("Changement LED: %d\n", redLight_1);
-      digitalWrite(Pin_Led, redLight_1);
-      xSemaphoreGive(gpioMutex);
-  } else {
-      Serial.println("Timeout mutex LED!");
+            case DIR_NEAR:
+              Serial.println(" Geste proche");
+              break;
+              
+            case DIR_FAR:
+              Serial.println(" Geste loin");
+              break;
+          }
+          xSemaphoreGive(serialMutex);
+        }
+      } else {
+        xSemaphoreGive(i2cMutex);
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
 void introDisplay() {
-   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   display.clearDisplay();
   
   const unsigned char intro [] PROGMEM = {
@@ -187,6 +270,7 @@ void introDisplay() {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3f, 0xff, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
   };
+
   
   display.drawBitmap(0, 0, intro, 128, 64, WHITE);
   
@@ -194,7 +278,7 @@ void introDisplay() {
   delay(4000);
   display.clearDisplay();
 
-   display.setTextColor(WHITE);                                // Set the color
+  display.setTextColor(WHITE);                                // Set the color
   display.setTextSize(2);                                     // Set the font size
   display.setCursor(6,10);                                    // Set the cursor coordinates
   display.print("Smart Home");
@@ -202,5 +286,6 @@ void introDisplay() {
   display.print("Automation");
 
   display.display();
+  delay(4000);
+  display.clearDisplay();
 }
-
