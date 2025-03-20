@@ -13,7 +13,11 @@
 // Configuration matérielle
 #define DHTPIN 33
 #define DHTTYPE DHT11
+
 #define LED_PIN 5
+#define PWM_FREQ 5000
+#define PWM_RESOLUTION 8
+
 #define SDA_PIN 21
 #define SCL_PIN 22
 
@@ -187,11 +191,19 @@ void gestureTask(void *pvParameters) {
               break;
 
             case DIR_NEAR:
-              Serial.println(" Geste proche");
+              if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
+                analogWrite(LED_PIN, 50); // 50% (255/2 ≈ 127)
+                Serial.println("≈ Proche: 50%");
+                xSemaphoreGive(ledMutex);
+              }
               break;
               
             case DIR_FAR:
-              Serial.println(" Geste loin");
+               if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
+                ledcWrite(LED_PIN, 255); // 100%
+                Serial.println("≈ Loin: 100%");
+                xSemaphoreGive(ledMutex);
+              }
               break;
           }
           xSemaphoreGive(serialMutex);
