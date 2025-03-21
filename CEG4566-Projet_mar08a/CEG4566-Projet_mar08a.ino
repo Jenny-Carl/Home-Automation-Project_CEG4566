@@ -27,10 +27,43 @@
 #define OLED_ADDRESS 0x3C       // i2c address for OLED display
 #define OLED_RESET 4 
 
+// Bitmaps des symboles (8x8 pixels)
+const unsigned char arrowUpBitmap[] PROGMEM = {
+  0x18, 0x3C, 0x7E, 0xFF, 0xFF, 0x3C, 0x3C, 0x3C
+};
+
+const unsigned char arrowDownBitmap[] PROGMEM = {
+  0x3C, 0x3C, 0x3C, 0xFF, 0xFF, 0x7E, 0x3C, 0x18
+};
+
+const unsigned char arrowLeftBitmap[] PROGMEM = {
+  0x18, 0x30, 0x7F, 0xFF, 0xFF, 0x7F, 0x30, 0x18
+};
+
+const unsigned char arrowRightBitmap[] PROGMEM = {
+  0x18, 0x0C, 0xFE, 0xFF, 0xFF, 0xFE, 0x0C, 0x18
+};
+
+const unsigned char dotFilledBitmap[] PROGMEM = {
+  0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C
+};
+
+const uint8_t dotEmptyBitmap[] = {
+  0x00, 0x3C, 0x42, 0x42, 0x42, 0x3C, 0x00, 0x00
+};
+
+// Structure pour gestion des symboles
+struct GestureSymbol {
+  const unsigned char* bitmap;
+  uint32_t displayUntil;
+};
+
+
 // Objets capteurs
 DHT dht(DHTPIN, DHTTYPE);
 SparkFun_APDS9960 gestureSensor;
 Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+GestureSymbol activeSymbols[6];
 
 static QueueHandle_t tempQueue;
 
@@ -44,6 +77,7 @@ SemaphoreHandle_t i2cMutex;
 SemaphoreHandle_t ledMutex;
 SemaphoreHandle_t serialMutex;
 SemaphoreHandle_t displayMutex;
+SemaphoreHandle_t symbolsMutex;
 
 void dhtTask(void *pvParameters);
 void gestureTask(void *pvParameters);
@@ -64,6 +98,9 @@ void setup() {
 
   // Initialisation OLED
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS); 
+
+  symbolsMutex = xSemaphoreCreateMutex();
+  memset(activeSymbols, 0, sizeof(activeSymbols));
 
   /* OLED display at start */
   introDisplay();
@@ -155,6 +192,7 @@ void dhtTask(void *pvParameters) {
 
 void gestureTask(void *pvParameters) {
   uint8_t gesture = 0;
+  const uint32_t displayDuration = 2000;
   
   for(;;) {
     if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50))) {
@@ -163,13 +201,16 @@ void gestureTask(void *pvParameters) {
         xSemaphoreGive(i2cMutex);
         
         if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+          uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
           switch(gesture) {
             case DIR_UP:
               Serial.println("↑ Geste haut");
+              activeSymbols[0] = {arrowUpBitmap, now + displayDuration};
               break;
               
             case DIR_DOWN:
               Serial.println("↓ Geste bas");
+               activeSymbols[1] = {arrowDownBitmap, now + displayDuration};
               break;
               
             case DIR_LEFT:
@@ -177,6 +218,7 @@ void gestureTask(void *pvParameters) {
                 digitalWrite(LED_PIN, LOW);
                 ledState = false;
                 Serial.println("← LED OFF");
+                activeSymbols[2] = {arrowLeftBitmap, now + displayDuration};
                 xSemaphoreGive(ledMutex);
               }
               break;
@@ -186,14 +228,16 @@ void gestureTask(void *pvParameters) {
                 digitalWrite(LED_PIN, HIGH);
                 ledState = true;
                 Serial.println("→ LED ON");
+                activeSymbols[3] = {arrowRightBitmap, now + displayDuration};
                 xSemaphoreGive(ledMutex);
               }
               break;
 
             case DIR_NEAR:
               if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
-                analogWrite(LED_PIN, 50); // 50% (255/2 ≈ 127)
-                Serial.println("≈ Proche: 50%");
+                analogWrite(LED_PIN, 50); 
+                Serial.println("≈ Proche:");
+                activeSymbols[4] = {dotEmptyBitmap, now + displayDuration};
                 xSemaphoreGive(ledMutex);
               }
               break;
@@ -202,11 +246,13 @@ void gestureTask(void *pvParameters) {
                if(xSemaphoreTake(ledMutex, pdMS_TO_TICKS(100))) {
                 ledcWrite(LED_PIN, 255); // 100%
                 Serial.println("≈ Loin: 100%");
+                activeSymbols[5] = {dotFilledBitmap, now + displayDuration};
                 xSemaphoreGive(ledMutex);
               }
               break;
           }
           xSemaphoreGive(serialMutex);
+          xSemaphoreGive(symbolsMutex);
         }
       } else {
         xSemaphoreGive(i2cMutex);
@@ -256,6 +302,19 @@ void indicatorDisplay(void *pvParameters) {
             }
             xSemaphoreGive(ledMutex);
           }
+
+        // Affichage symboles gestes
+        uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        display.setCursor(58, 40);
+        display.print("-");
+        if(xSemaphoreTake(symbolsMutex, pdMS_TO_TICKS(50))) {
+            for(int i = 0; i < 6; i++) {
+              if(activeSymbols[i].bitmap && (now < activeSymbols[i].displayUntil)) {
+                display.drawBitmap(56, 36, activeSymbols[i].bitmap, 8, 8, WHITE);
+              }
+            }
+          xSemaphoreGive(symbolsMutex);
+        }
 
           display.display();
           xSemaphoreGive(displayMutex);
