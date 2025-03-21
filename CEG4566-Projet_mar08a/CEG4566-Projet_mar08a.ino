@@ -27,6 +27,9 @@
 #define OLED_ADDRESS 0x3C       // i2c address for OLED display
 #define OLED_RESET 4 
 
+/* Fan pin */          
+#define FAN 26               
+
 // Bitmaps des symboles (8x8 pixels)
 const unsigned char arrowUpBitmap[] PROGMEM = {
   0x18, 0x3C, 0x7E, 0xFF, 0xFF, 0x3C, 0x3C, 0x3C
@@ -69,6 +72,7 @@ static QueueHandle_t tempQueue;
 
 // Variables partagées
 volatile bool ledState = false;
+volatile bool fanState = false;
 //float temperature = 0.0;
 //float humidity = 0.0;
 
@@ -78,13 +82,14 @@ SemaphoreHandle_t ledMutex;
 SemaphoreHandle_t serialMutex;
 SemaphoreHandle_t displayMutex;
 SemaphoreHandle_t symbolsMutex;
+SemaphoreHandle_t fanMutex;
 
 void dhtTask(void *pvParameters);
 void gestureTask(void *pvParameters);
 
 /* Status for OLED display indicators */
 bool LEDStatus = false;
-
+bool FANStatus = false;
 
 void setup() {
   Serial.begin(115200);
@@ -95,6 +100,7 @@ void setup() {
   // Initialisation capteurs
   dht.begin();
   pinMode(LED_PIN, OUTPUT);
+  pinMode(FAN, OUTPUT);
 
   // Initialisation OLED
   display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS); 
@@ -109,6 +115,10 @@ void setup() {
   i2cMutex = xSemaphoreCreateMutex();
   ledMutex = xSemaphoreCreateMutex();
   serialMutex = xSemaphoreCreateMutex();
+  fanMutex = xSemaphoreCreateMutex();
+
+  /* Defining task handles */
+  TaskHandle_t autoFan_handle = NULL;
 
   // Configuration capteur de gestes
   if(xSemaphoreTake(i2cMutex, portMAX_DELAY)) {
@@ -126,35 +136,16 @@ void setup() {
   displayMutex = xSemaphoreCreateMutex();
 
   // Création des tâches
-  xTaskCreatePinnedToCore(
-    dhtTask,
-    "DHT_Task",
-    2048,
-    NULL,
-    1,
-    NULL,
-    APP_CPU_NUM
-  );
+  xTaskCreatePinnedToCore(dhtTask,"DHT_Task",2048,NULL,1,NULL,APP_CPU_NUM);
 
-  xTaskCreatePinnedToCore(
-    gestureTask,
-    "Gesture_Task",
-    2048,
-    NULL,
-    2,
-    NULL,
-    PRO_CPU_NUM
-  );
+  xTaskCreatePinnedToCore(gestureTask,"Gesture_Task",2048,NULL,2,NULL,PRO_CPU_NUM);
 
-  xTaskCreatePinnedToCore(
-    indicatorDisplay,
-    "DisplayTask",
-    4096,
-    NULL,
-    3,
-    NULL,
-    PRO_CPU_NUM
-  );
+  xTaskCreatePinnedToCore(indicatorDisplay,"DisplayTask",4096,NULL,3,NULL,PRO_CPU_NUM);
+
+  xTaskCreatePinnedToCore (autoFanTask, "AutoFanTask", 2048, NULL, 3, &autoFan_handle, PRO_CPU_NUM); 
+
+  /* Suspending auto mode tasks at start */
+  //vTaskSuspend (autoFan_handle);
 
   // Suppression de la tâche loop
   vTaskDelete(NULL);
@@ -172,7 +163,7 @@ void dhtTask(void *pvParameters) {
   for(;;) {
     float h = dht.readHumidity();
     float t = dht.readTemperature();
-    int temperatureInt = (int)round(t);
+    int temperatureInt = (int)t;
 
     if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
       if(!isnan(h) && !isnan(t)) {
@@ -204,13 +195,23 @@ void gestureTask(void *pvParameters) {
           uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
           switch(gesture) {
             case DIR_UP:
-              Serial.println("↑ Geste haut");
-              activeSymbols[0] = {arrowUpBitmap, now + displayDuration};
+              if(xSemaphoreTake(fanMutex, pdMS_TO_TICKS(100))) {
+                digitalWrite(FAN,HIGH);
+                fanState = true;
+                Serial.println("↑ [FAN] ACTIVATION");
+                activeSymbols[0] = {arrowUpBitmap, now + displayDuration};
+                xSemaphoreGive(fanMutex);
+              }
               break;
               
             case DIR_DOWN:
-              Serial.println("↓ Geste bas");
-               activeSymbols[1] = {arrowDownBitmap, now + displayDuration};
+              if(xSemaphoreTake(fanMutex, pdMS_TO_TICKS(100))) {
+                digitalWrite(FAN,LOW);
+                fanState = false;
+                Serial.println("↓ [FAN] DESACTIVATION");
+                activeSymbols[1] = {arrowDownBitmap, now + displayDuration};
+                xSemaphoreGive(fanMutex);
+              }
               break;
               
             case DIR_LEFT:
@@ -262,6 +263,35 @@ void gestureTask(void *pvParameters) {
   }
 }
 
+void autoFanTask(void *pvParameter) {
+  int tempValue;
+  const unsigned char fanIndicator [] PROGMEM = {
+    0x01, 0xf8, 0x00, 0x07, 0x0e, 0x00, 0x0d, 0xc3, 0x00, 0x1b, 0xe1, 0x80, 0x11, 0xe0, 0x80, 0x30, 
+	  0xe0, 0xc0, 0x30, 0x66, 0xc0, 0x30, 0x7f, 0xc0, 0x33, 0xff, 0xc0, 0x33, 0xde, 0xc0, 0x17, 0xc0, 
+	  0x80, 0x1b, 0x81, 0x80, 0x0f, 0x83, 0x00, 0x06, 0x06, 0x00, 0x03, 0xfc, 0x00, 0x00, 0x00, 0x00, 
+	  0x00, 0xf0, 0x00, 0x01, 0xf8, 0x00, 0x07, 0xfe, 0x00, 0x07, 0xfe, 0x00
+  };
+  
+  for (;;) { 
+    xQueueReceive(tempQueue, &tempValue, portMAX_DELAY);    
+    
+    if (tempValue >= 33) {
+      //SerialBT.print ("Fan on?"); 
+      digitalWrite(FAN,HIGH);
+      FANStatus = true;
+      display.drawBitmap(2, 36, fanIndicator, 20, 20, WHITE);
+    }
+    else if (tempValue < 33) {
+      //SerialBT.print ("Fan off?");
+      digitalWrite(FAN,LOW);
+      FANStatus = false; 
+      display.setCursor(6, 38);
+      display.print("-");
+    }
+    vTaskDelay(200 / portTICK_PERIOD_MS);
+  }
+}
+
 void indicatorDisplay(void *pvParameters) {
   int tempValue;
   uint32_t lastUpdate = 0;
@@ -273,6 +303,13 @@ void indicatorDisplay(void *pvParameters) {
   	0xf1, 0x00, 0x0f, 0xfb, 0x00, 0x0f, 0xff, 0x00, 0x0f, 0xff, 0x00, 0x07, 0xfe, 0x00, 0x07, 0xfe, 
   	0x00, 0x03, 0xfc, 0x00, 0x01, 0xfc, 0x00, 0x01, 0xf8, 0x00, 0x01, 0x00, 0x00, 0x01, 0x80, 0x00, 
   	0x01, 0xf8, 0x00, 0x01, 0xf8, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x00, 0x00
+  };
+
+  const unsigned char fanIndicator [] PROGMEM = {
+    0x01, 0xf8, 0x00, 0x07, 0x0e, 0x00, 0x0d, 0xc3, 0x00, 0x1b, 0xe1, 0x80, 0x11, 0xe0, 0x80, 0x30, 
+	  0xe0, 0xc0, 0x30, 0x66, 0xc0, 0x30, 0x7f, 0xc0, 0x33, 0xff, 0xc0, 0x33, 0xde, 0xc0, 0x17, 0xc0, 
+	  0x80, 0x1b, 0x81, 0x80, 0x0f, 0x83, 0x00, 0x06, 0x06, 0x00, 0x03, 0xfc, 0x00, 0x00, 0x00, 0x00, 
+	  0x00, 0xf0, 0x00, 0x01, 0xf8, 0x00, 0x07, 0xfe, 0x00, 0x07, 0xfe, 0x00
   };
 
   for(;;) {
@@ -303,18 +340,29 @@ void indicatorDisplay(void *pvParameters) {
             xSemaphoreGive(ledMutex);
           }
 
-        // Affichage symboles gestes
-        uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
-        display.setCursor(58, 40);
-        display.print("-");
-        if(xSemaphoreTake(symbolsMutex, pdMS_TO_TICKS(50))) {
-            for(int i = 0; i < 6; i++) {
-              if(activeSymbols[i].bitmap && (now < activeSymbols[i].displayUntil)) {
-                display.drawBitmap(56, 36, activeSymbols[i].bitmap, 8, 8, WHITE);
+          // Affichage symboles gestes
+          uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+          display.setCursor(58, 40);
+          display.print("-");
+          if(xSemaphoreTake(symbolsMutex, pdMS_TO_TICKS(50))) {
+              for(int i = 0; i < 6; i++) {
+                if(activeSymbols[i].bitmap && (now < activeSymbols[i].displayUntil)) {
+                  display.drawBitmap(56, 36, activeSymbols[i].bitmap, 8, 8, WHITE);
+                }
               }
+            xSemaphoreGive(symbolsMutex);
+          }
+
+          // Affichage état LED
+          if(xSemaphoreTake(fanMutex, pdMS_TO_TICKS(50))) {
+            if(fanState) {
+              display.drawBitmap(2, 36, fanIndicator, 20, 20, WHITE);
+            } else {
+              display.setCursor(6, 38);
+              display.print("-");
             }
-          xSemaphoreGive(symbolsMutex);
-        }
+            xSemaphoreGive(fanMutex);
+          }
 
           display.display();
           xSemaphoreGive(displayMutex);
