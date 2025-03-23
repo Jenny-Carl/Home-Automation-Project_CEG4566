@@ -61,6 +61,7 @@ std::atomic<int> ledBrightness{0};
 std::atomic<bool> ledState{false};
 std::atomic<bool> fanState{false};
 std::atomic<bool> tempAlert{false};
+std::atomic<bool> automaticMode{true};
 
 // Mutex
 SemaphoreHandle_t i2cMutex, displayMutex, serialMutex;
@@ -70,6 +71,8 @@ void introDisplay();
 void dhtTask(void *pvParameters);
 void gestureTask(void *pvParameters);
 void indicatorDisplay(void *pvParameters);
+void autoFanTask(void *pvParameters);
+void setupServer();
 String readDHTTemperature();
 String readDHTHumidity();
 String processor(const String& var);
@@ -79,31 +82,108 @@ const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
   <style>
-    html {font-family: Arial; display: inline-block; margin: 0 auto; text-align: center;}
-    h2 {font-size: 3.0rem;}
-    p {font-size: 3.0rem;}
-    .units {font-size: 1.2rem;}
-    .dht-labels{font-size: 1.5rem; vertical-align:middle; padding-bottom: 15px;}
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .sensor-data {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0;
+    }
+    .sensor-item {
+      text-align: center;
+    }
+    .mode-control {
+      text-align: center;
+      margin-top: 30px;
+    }
+    .button {
+      padding: 12px 25px;
+      margin: 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: all 0.3s;
+    }
+    .auto-btn {
+      background-color: %AUTOCOLOR%;
+      color: white;
+    }
+    .manual-btn {
+      background-color: %MANUALCOLOR%;
+      color: white;
+    }
+    .current-mode {
+      font-size: 18px;
+      color: #666;
+      margin-top: 15px;
+    }
+    .icon {
+      font-size: 24px;
+      margin-right: 10px;
+    }
   </style>
+  <script>
+    function setMode(mode) {
+      fetch('/mode?mode=' + mode)
+        .then(response => response.text())
+        .then(data => {
+          if(data === 'OK') {
+            location.reload();
+          }
+        });
+    }
+  </script>
 </head>
 <body>
-  <h2>ESP32 DHT Server</h2>
-  <p>
-    <i class="fas fa-thermometer-half" style="color:#059e8a;"></i> 
-    <span class="dht-labels">Temperature</span> 
-    <span id="temperature">%TEMPERATURE%</span>
-    <sup class="units">&deg;C</sup>
-  </p>
-  <p>
-    <i class="fas fa-tint" style="color:#00add6;"></i> 
-    <span class="dht-labels">Humidity</span>
-    <span id="humidity">%HUMIDITY%</span>
-    <sup class="units">&percnt;</sup>
-  </p>
+  <div class="card">
+    <h1><i class="fas fa-thermometer-half icon"></i>Station Météo Intelligente</h1>
+    
+    <div class="sensor-data">
+      <div class="sensor-item">
+        <i class="fas fa-temperature-high" style="color: #059e8a; font-size: 32px;"></i>
+        <h2>Température</h2>
+        <p style="font-size: 24px;">%TEMPERATURE% °C</p>
+      </div>
+      
+      <div class="sensor-item">
+        <i class="fas fa-tint" style="color: #00add6; font-size: 32px;"></i>
+        <h2>Humidité</h2>
+        <p style="font-size: 24px;">%HUMIDITY% %%</p>
+      </div>
+    </div>
+
+    <div class="mode-control">
+      <button class="button auto-btn" onclick="setMode('auto')">
+        <i class="fas fa-robot"></i> Mode Automatique
+      </button>
+      
+      <button class="button manual-btn" onclick="setMode('manual')">
+        <i class="fas fa-hand-paper"></i> Mode Manuel
+      </button>
+      
+      <p class="current-mode">
+        Mode actuel : <strong>%MODE%</strong>
+      </p>
+    </div>
+  </div>
 </body>
 </html>)rawliteral";
+
 
 void setup() {
   Serial.begin(115200);
@@ -119,6 +199,8 @@ void setup() {
     while(1);
   }
   introDisplay();
+
+  
 
   // Init DHT
   dht.begin();
@@ -136,6 +218,11 @@ void setup() {
   displayMutex = xSemaphoreCreateMutex();
   serialMutex = xSemaphoreCreateMutex();
 
+  if(!i2cMutex || !displayMutex || !serialMutex) {
+    Serial.println("Erreur création mutex!");
+    while(1);
+  }
+
   // Configuration capteur de gestes
   if(xSemaphoreTake(i2cMutex, portMAX_DELAY)) {
     //gestureSensor.reset(); // Ajouter cette ligne
@@ -150,9 +237,10 @@ void setup() {
   }
 
   // Tâches
-  xTaskCreatePinnedToCore(dhtTask, "DHT", 4096, NULL, 2, NULL, APP_CPU_NUM);
-  xTaskCreatePinnedToCore(gestureTask, "Gestes", 3072, NULL, 3, NULL, PRO_CPU_NUM);
-  xTaskCreatePinnedToCore(indicatorDisplay, "OLED", 4096, NULL, 4, NULL, PRO_CPU_NUM);
+  xTaskCreatePinnedToCore(dhtTask, "DHT", 4096, NULL, 1, NULL, APP_CPU_NUM);
+  xTaskCreatePinnedToCore(gestureTask, "Gestes", 4096, NULL, 1, NULL, PRO_CPU_NUM);
+  xTaskCreatePinnedToCore(indicatorDisplay, "OLED", 4096, NULL, 2, NULL, PRO_CPU_NUM);
+  xTaskCreatePinnedToCore(autoFanTask, "AutoFan", 2048, NULL, 1, NULL, PRO_CPU_NUM);
 
   // WiFi
   WiFi.begin(SECRET_SSID, SECRET_OPTIONAL_PASS);
@@ -163,17 +251,9 @@ void setup() {
   }
   Serial.println("\nConnecté! IP: " + WiFi.localIP().toString());
 
-  // Serveur Web
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, processor);
-  });
-  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", readDHTTemperature());
-  });
-  server.on("/humidity", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", readDHTHumidity());
-  });
+  setupServer();
   server.begin();
+  
 }
 
 void loop() { vTaskDelete(NULL); }
@@ -214,57 +294,100 @@ void dhtTask(void *pvParameters) {
   }
 }
 
+const char* PARAM_MODE = "mode";
+void autoFanTask(void *pvParameters) {
+  for(;;) {
+    if(automaticMode.load()) {
+      float t = temperature.load();
+      
+      if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+        if(t > 33.0 && !fanState.load()) {
+          digitalWrite(FAN, HIGH);
+          fanState.store(true);
+          Serial.println("[AUTO] Ventilateur ACTIVÉ");
+        }
+        else if(t <= 30.0 && fanState.load()) {
+          digitalWrite(FAN, LOW);
+          fanState.store(false);
+          Serial.println("[AUTO] Ventilateur DÉSACTIVÉ");
+        }
+        xSemaphoreGive(serialMutex);
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+}
+
+
 void gestureTask(void *pvParameters) {
   uint8_t gesture;
   
   for(;;) {
-    if(gestureSensor.isGestureAvailable()) {
-      gesture = gestureSensor.readGesture();
-      uint32_t now = millis();
-      bool currentLedState = ledState.load(std::memory_order_acquire);
-      
-      switch(gesture) {
-        case DIR_UP: 
-          digitalWrite(FAN, HIGH);
-          Serial.println("↑ FAN ON");
-          break;
-          
-        case DIR_DOWN:
-          digitalWrite(FAN, LOW);
-          Serial.println("↓ FAN OFF");
-          break;
+    if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100))) {
+      if(gestureSensor.isGestureAvailable()) {
+        gesture = gestureSensor.readGesture();
+        xSemaphoreGive(i2cMutex);
+        uint32_t now = millis();
+        bool currentLedState = ledState.load(std::memory_order_acquire);
 
-        case DIR_LEFT:
-          analogWrite(LED_PIN, 0);
-          Serial.println("← LED OFF");
-          ledState.store(false);
-          break;
+        if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+          switch(gesture) {
+            case DIR_UP:
+              if(!automaticMode.load()) { 
+                digitalWrite(FAN, HIGH);
+                fanState.store(true);
+                Serial.println("↑ FAN ON");
+              }
+              break;
+              
+            case DIR_DOWN:
+              if(!automaticMode.load()) {
+                digitalWrite(FAN, LOW);
+                fanState.store(false);
+                Serial.println("↓ FAN OFF");
+              }
+              break;
 
-        case DIR_RIGHT:
-          analogWrite(LED_PIN, 255);
-          Serial.println("→ LED ON");
-          ledState.store(true);
-          break;
+            case DIR_LEFT:
+              analogWrite(LED_PIN, 0);
+              ledBrightness.store(0);
+              ledState.store(false);
+              Serial.println("← LED OFF");
+              break;
 
-        case DIR_NEAR:
-          if(currentLedState) { // Vérification atomique
-            analogWrite(LED_PIN, 50);
-            ledBrightness.store(50,  std::memory_order_release);
-            Serial.println("≈ LED 20%");
-          } else {
-            Serial.println("[ERREUR] Utilisez → pour activer la LED");
+            case DIR_RIGHT:
+              analogWrite(LED_PIN, 255);
+              ledBrightness.store(255);
+              ledState.store(true);
+              Serial.println("→ LED ON");
+              break;
+
+            case DIR_NEAR:
+              if(currentLedState) { // Vérification atomique
+                analogWrite(LED_PIN, 50);
+                ledBrightness.store(50);
+                ledBrightness.store(50,  std::memory_order_release);
+                Serial.println("≈ LED 20%");
+              } else {
+                Serial.println("[ERREUR] Utilisez → pour activer la LED");
+              }
+              break;
+
+            case DIR_FAR:
+              if(currentLedState) { // Vérification atomique
+                analogWrite(LED_PIN, 255);
+                ledBrightness.store(255);
+                ledBrightness.store(255,  std::memory_order_release);
+                Serial.println("≈ LED 100%");
+              } else {
+                Serial.println("[ERREUR] Utilisez → pour activer la LED");
+              }
+              break;
           }
-          break;
-
-        case DIR_FAR:
-          if(currentLedState) { // Vérification atomique
-            analogWrite(LED_PIN, 255);
-            ledBrightness.store(255,  std::memory_order_release);
-            Serial.println("≈ LED 100%");
-          } else {
-            Serial.println("[ERREUR] Utilisez → pour activer la LED");
-          }
-          break;
+          xSemaphoreGive(serialMutex);
+        }
+      } else {
+        xSemaphoreGive(i2cMutex);
       }
     }
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -335,6 +458,29 @@ String readDHTHumidity() {
 }
 
 String processor(const String& var) {
-  return var == "TEMPERATURE" ? readDHTTemperature() : 
-         var == "HUMIDITY" ? readDHTHumidity() : String();
+  if(var == "MODE") return automaticMode.load() ? "Automatique" : "Manuel";
+  if(var == "AUTOCOLOR") return automaticMode.load() ? "#4CAF50" : "#808080";
+  if(var == "MANUALCOLOR") return automaticMode.load() ? "#808080" : "#2196F3";
+  if(var == "TEMPERATURE") return readDHTTemperature();
+  if(var == "HUMIDITY") return readDHTHumidity();
+  return String();
+}
+
+void setupServer() {
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html, processor);
+  });
+
+  server.on("/mode", HTTP_GET, [](AsyncWebServerRequest *request){
+    if(request->hasParam("mode")) {
+      String mode = request->getParam("mode")->value();
+      automaticMode.store(mode == "auto");
+      
+      if(automaticMode.load()) {
+        digitalWrite(FAN, LOW);
+        fanState.store(false);
+      }
+      request->send(200, "text/plain", "OK");
+    }
+  });
 }
