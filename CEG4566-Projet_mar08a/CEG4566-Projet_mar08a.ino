@@ -64,7 +64,7 @@ std::atomic<bool> tempAlert{false};
 std::atomic<bool> automaticMode{true};
 
 // Mutex
-SemaphoreHandle_t i2cMutex, displayMutex, serialMutex;
+SemaphoreHandle_t i2cMutex, displayMutex, serialMutex, symbolsMutex;
 
 // Prototypes
 void introDisplay();
@@ -217,8 +217,11 @@ void setup() {
   i2cMutex = xSemaphoreCreateMutex();
   displayMutex = xSemaphoreCreateMutex();
   serialMutex = xSemaphoreCreateMutex();
+  symbolsMutex = xSemaphoreCreateMutex();
 
-  if(!i2cMutex || !displayMutex || !serialMutex) {
+  memset(activeSymbols, 0, sizeof(activeSymbols));
+
+  if(!i2cMutex || !displayMutex || !serialMutex || !symbolsMutex) {
     Serial.println("Erreur création mutex!");
     while(1);
   }
@@ -321,6 +324,7 @@ void autoFanTask(void *pvParameters) {
 
 void gestureTask(void *pvParameters) {
   uint8_t gesture;
+  const uint32_t displayDuration = 2000;
   
   for(;;) {
     if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100))) {
@@ -337,6 +341,7 @@ void gestureTask(void *pvParameters) {
                 digitalWrite(FAN, HIGH);
                 fanState.store(true);
                 Serial.println("↑ FAN ON");
+                activeSymbols[0] = {arrowUpBitmap, now + displayDuration};
               }
               break;
               
@@ -345,6 +350,7 @@ void gestureTask(void *pvParameters) {
                 digitalWrite(FAN, LOW);
                 fanState.store(false);
                 Serial.println("↓ FAN OFF");
+                activeSymbols[1] = {arrowDownBitmap, now + displayDuration};
               }
               break;
 
@@ -353,6 +359,7 @@ void gestureTask(void *pvParameters) {
               ledBrightness.store(0);
               ledState.store(false);
               Serial.println("← LED OFF");
+              activeSymbols[2] = {arrowLeftBitmap, now + displayDuration};
               break;
 
             case DIR_RIGHT:
@@ -360,6 +367,7 @@ void gestureTask(void *pvParameters) {
               ledBrightness.store(255);
               ledState.store(true);
               Serial.println("→ LED ON");
+              activeSymbols[3] = {arrowRightBitmap, now + displayDuration};
               break;
 
             case DIR_NEAR:
@@ -368,6 +376,7 @@ void gestureTask(void *pvParameters) {
                 ledBrightness.store(50);
                 ledBrightness.store(50,  std::memory_order_release);
                 Serial.println("≈ LED 20%");
+                activeSymbols[4] = {dotEmptyBitmap, now + displayDuration};
               } else {
                 Serial.println("[ERREUR] Utilisez → pour activer la LED");
               }
@@ -379,6 +388,7 @@ void gestureTask(void *pvParameters) {
                 ledBrightness.store(255);
                 ledBrightness.store(255,  std::memory_order_release);
                 Serial.println("≈ LED 100%");
+                activeSymbols[5] = {dotFilledBitmap, now + displayDuration};
               } else {
                 Serial.println("[ERREUR] Utilisez → pour activer la LED");
               }
@@ -404,7 +414,7 @@ void indicatorDisplay(void *pvParameters) {
       display.setTextSize(2);
       display.setCursor(0, 10);
       //display.printf("Temp: %.1fC", temperature.load());
-      display.printf("Temp: %.1f", temperature.load());
+      display.printf("Temp: %d", (int)temperature.load());
       display.print((char)247);
       display.print("C");
 
@@ -414,12 +424,23 @@ void indicatorDisplay(void *pvParameters) {
 
       // État LED
       if(ledState) display.drawBitmap(28, 36, lightIndicator, 20, 20, WHITE);
-      display.setCursor(28, 55);
-      display.printf("%d%%", (ledBrightness.load() * 100) / 255);
+      // display.setCursor(28, 55);
+      // display.printf("%d%%", (ledBrightness.load() * 100) / 255);
 
       // Ventilateur
       if(fanState.load()) {
         display.drawBitmap(2, 36, fanIndicator, 20, 20, WHITE);
+      }
+
+      uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+      display.setCursor(58, 36);
+      if(xSemaphoreTake(symbolsMutex, pdMS_TO_TICKS(50))) {
+          for(int i = 0; i < 6; i++) {
+            if(activeSymbols[i].bitmap && (now < activeSymbols[i].displayUntil)) {
+              display.drawBitmap(56, 36, activeSymbols[i].bitmap, 8, 8, WHITE);
+            }
+          }
+        xSemaphoreGive(symbolsMutex);
       }
 
       display.display();
