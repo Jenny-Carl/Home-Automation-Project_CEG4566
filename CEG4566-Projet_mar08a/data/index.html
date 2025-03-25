@@ -1,0 +1,104 @@
+<!DOCTYPE HTML><html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f5f5f5;
+    }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .sensor-data {
+      display: flex;
+      justify-content: space-around;
+      margin: 20px 0;
+    }
+    .sensor-item {
+      text-align: center;
+    }
+    .mode-control {
+      text-align: center;
+      margin-top: 30px;
+    }
+    .button {
+      padding: 12px 25px;
+      margin: 10px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: all 0.3s;
+    }
+    .auto-btn {
+      background-color: #4CAF50;
+      color: white;
+    }
+    .manual-btn {
+      background-color: #808080;
+      color: white;
+    }
+    .current-mode {
+      font-size: 18px;
+      color: #666;
+      margin-top: 15px;
+    }
+    .icon {
+      font-size: 24px;
+      margin-right: 10px;
+    }
+  </style>
+  <script>
+    function setMode(mode) {
+      fetch('/mode?mode=' + mode)
+        .then(response => response.text())
+        .then(data => {
+          if(data === 'OK') {
+            location.reload();
+          }
+        });
+    }
+  </script>
+</head>
+<body>
+  <div class="card">
+    <h1><i class="fas fa-thermometer-half icon"></i>Station Météo Intelligente</h1>
+    
+    <div class="sensor-data">
+      <div class="sensor-item">
+        <i class="fas fa-temperature-high" style="color: #059e8a; font-size: 32px;"></i>
+        <h2>Température</h2>
+        <p style="font-size: 24px;">%TEMPERATURE% °C</p>
+      </div>
+      
+      <div class="sensor-item">
+        <i class="fas fa-tint" style="color: #00add6; font-size: 32px;"></i>
+        <h2>Humidité</h2>
+        <p style="font-size: 24px;">%HUMIDITY% %%</p>
+      </div>
+    </div>
+
+    <div class="mode-control">
+      <button class="button auto-btn" onclick="setMode('auto')">
+        <i class="fas fa-robot"></i> Mode Automatique
+      </button>
+      
+      <button class="button manual-btn" onclick="setMode('manual')">
+        <i class="fas fa-hand-paper"></i> Mode Manuel
+      </button>
+      
+      <p class="current-mode">
+        Mode actuel : <strong>%MODE%</strong>
+      </p>
+    </div>
+  </div>
+</body>
+</html>

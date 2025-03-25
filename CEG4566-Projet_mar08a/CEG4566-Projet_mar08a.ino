@@ -4,23 +4,24 @@
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <Adafruit_SSD1306.h>
-#include <thingProperties.h>
+//#include <thingProperties.h>
 #include <atomic>
+#include "LittleFS.h"
 
 #undef ERROR
 #include <SparkFun_APDS9960.h>
 
 // Configuration matérielle
-#define DHTPIN 33
-#define DHTTYPE DHT11
+//#define DHTPIN 33
+//#define DHTTYPE DHT11
 #define LED_PIN 5
 #define FAN 26
-#define SDA_PIN 21
-#define SCL_PIN 22
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
+//#define SDA_PIN 21
+//#define SCL_PIN 22
+//#define OLED_WIDTH 128
+//#define OLED_HEIGHT 64
 #define OLED_ADDRESS 0x3C
-#define OLED_RESET 4
+//#define OLED_RESET 4
 
 // Bitmaps PROGMEM
 const unsigned char arrowUpBitmap[] PROGMEM = {0x18,0x3C,0x7E,0xFF,0xFF,0x3C,0x3C,0x3C};
@@ -48,10 +49,10 @@ struct GestureSymbol {
 };
 
 // Objets capteurs
-DHT dht(DHTPIN, DHTTYPE);
+DHT dht(33, DHT11);
 AsyncWebServer server(80);
 SparkFun_APDS9960 gestureSensor;
-Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, OLED_RESET);
+Adafruit_SSD1306 display(128, 64, &Wire, 4);
 GestureSymbol activeSymbols[6];
 
 // Variables atomiques
@@ -78,6 +79,7 @@ String readDHTHumidity();
 String processor(const String& var);
 
 // Ajoutez cette section HTML avant setup()
+/*
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
 <head>
@@ -182,19 +184,19 @@ const char index_html[] PROGMEM = R"rawliteral(
     </div>
   </div>
 </body>
-</html>)rawliteral";
+</html>)rawliteral";*/
 
 
 void setup() {
   Serial.begin(115200);
-  while(!Serial); // Attendre connection Serial
+  //while(!Serial); // Attendre connection Serial
   
   // Initialisation matérielle
-  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.begin(21, 22);
   Wire.setClock(100000);
 
   // Init OLED
-  if(!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("Erreur OLED!");
     while(1);
   }
@@ -246,13 +248,19 @@ void setup() {
   xTaskCreatePinnedToCore(autoFanTask, "AutoFan", 2048, NULL, 1, NULL, PRO_CPU_NUM);
 
   // WiFi
-  WiFi.begin(SECRET_SSID, SECRET_OPTIONAL_PASS);
+  WiFi.begin("SECRET_SSID", "SECRET_OPTIONAL_PASS");
   Serial.print("Connexion WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("\nConnecté! IP: " + WiFi.localIP().toString());
+  Serial.print("\nConnecté! IP: ");
+  Serial.println(WiFi.localIP());
+
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+    return;
+  }
 
   setupServer();
   server.begin();
@@ -480,8 +488,8 @@ String readDHTHumidity() {
 
 String processor(const String& var) {
   if(var == "MODE") return automaticMode.load() ? "Automatique" : "Manuel";
-  if(var == "AUTOCOLOR") return automaticMode.load() ? "#4CAF50" : "#808080";
-  if(var == "MANUALCOLOR") return automaticMode.load() ? "#808080" : "#2196F3";
+  //if(var == "AUTOCOLOR") return automaticMode.load() ? "#4CAF50" : "#808080";
+  //if(var == "MANUALCOLOR") return automaticMode.load() ? "#808080" : "#2196F3";
   if(var == "TEMPERATURE") return readDHTTemperature();
   if(var == "HUMIDITY") return readDHTHumidity();
   return String();
@@ -489,7 +497,8 @@ String processor(const String& var) {
 
 void setupServer() {
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, processor);
+    //request->send_P(200, "text/html", index_html, processor);
+    request->send(LittleFS, "/index.html", "text/html", processor);
   });
 
   server.on("/mode", HTTP_GET, [](AsyncWebServerRequest *request){
