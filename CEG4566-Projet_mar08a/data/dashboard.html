@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Home Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<script src="script.js"></script>
+<body>
+  <div class="dashboard-container">
+    <div class="overlay"></div>
+
+    <!-- Top Bar -->
+    <div class="top-bar">
+      <div>
+        <p class="welcome">Welcome home,</p>
+        <h2 class="username">Andrey Thomson</h2>
+      </div>
+      <img src="images/user.png" alt="User" class="user-pic"/>
+    </div>
+
+    <!-- Room Cards -->
+    <div class="rooms">
+<div class="room" style="background-image: url('images/livingroom.png');" onclick="goToMonitor()">Living Room</div>
+  <div class="room" style="background-image: url('images/kitchen.png');" onclick="goToMonitor()">Kitchen</div>
+  <div class="room" style="background-image: url('images/bedroom.png');" onclick="goToMonitor()">Bedroom</div>
+  <div class="room" style="background-image: url('images/diningroom.png');" onclick="goToMonitor()">Dining Room</div>
+    </div>
+
+    <!-- Bottom Navbar -->
+    <img src="images/navbar.png" alt="Navbar" class="navbar" />
+  </div>
+  <script src="script.js"></script>
+</body>
+</html>

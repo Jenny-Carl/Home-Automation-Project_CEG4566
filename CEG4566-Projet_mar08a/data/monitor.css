@@ -1,0 +1,290 @@
+/* Container & Background */
+body {
+  margin: 0;
+  font-family: 'Poppins', sans-serif;
+  background: url('images/background.png') no-repeat center center/cover;
+  height: 100vh;
+  overflow: hidden;
+}
+
+
+.monitor-container {
+  position: relative;
+  max-width: 428px;
+  margin: 0 auto;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Overlay */
+.overlay {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  z-index: 1;
+}
+
+/* Header */
+.header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px;
+}
+
+.back-icon {
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+
+.user-pic {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+/* Status Cards */
+.status-cards {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.status-card {
+  background: white;
+  width: 240px;
+  height: 65px;
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+
+.status-icon {
+  width: 35px;
+  height: 35px;
+  margin-right: 14px;
+}
+
+.status-value {
+  margin-left: -80px;
+  font-family: 'Verdana', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: #000;
+}
+
+.status-label {
+  font-family: 'ABeeZee', sans-serif;
+  font-size: 14px;
+  margin: 3px 0 0;
+  color: #000;
+}
+
+/* Controls */
+.controls {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  z-index: 2;
+  position: relative;
+}
+
+.control-card {
+  background: white;
+  width: 240px;
+  height: 70px;
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+}
+
+.control-icon {
+  width: 40px;
+  height: 40px;
+}
+
+.control-label {
+  margin-left: -80px;
+  font-family: 'Verdana', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: #000;
+}
+
+/* Switch Styling */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0;
+  right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: 0.4s;
+  border-radius: 34px;
+}
+
+.slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.4s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: #CD2237;
+}
+
+input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+/* Bottom navbar - centered */
+.navbar {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 150%;
+  max-width: 428px;
+  height: 110px;
+  z-index: 3;
+  object-fit: contain;
+}
+/* Group ON/OFF text with toggle */
+.toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Toggle Text */
+.toggle-text {
+  font-size: 12px;
+  font-weight: 600;
+  font-family: 'Poppins', sans-serif;
+}
+
+.toggle-text.off {
+  color: gray;
+}
+
+.toggle-text.on {
+  color: #CD2237;
+}
+
+.vertical-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  margin-top: 10px;
+}
+.toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+/* Mode Card Styling */
+.mode-card {
+  background: white;
+  width: 240px;
+  height: auto;
+  border-radius: 15px;
+  padding: 10px 20px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  margin: 12px auto;
+  text-align: center;
+  position: relative;
+  z-index: 3;
+}
+
+.mode-title {
+  margin-left: -80px;
+  font-family: 'Verdana', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  color: #000;
+}
+
+.mode-button-group {
+  display: flex;
+  justify-content: space-around;
+  gap: 40px;
+  margin-bottom: 6px;
+}
+
+.mode-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: 'Poppins', sans-serif;
+  border: none;
+  border-radius: 8px;
+  background-color: #ccc;
+  color: #000;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+.mode-btn:hover {
+  filter: brightness(0.95);
+}
+
+.mode-btn.active {
+  background-color: #CD2237;
+  color: white;
+}
+
+.mode-status {
+  font-size: 12px;
+  font-weight: 500;
+  color: #555;
+  font-family: 'Poppins', sans-serif;
+}
+.overlay {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.15);
+  z-index: 1;
+}
+.mode-card {
+  position: relative;
+  z-index: 2;
+}

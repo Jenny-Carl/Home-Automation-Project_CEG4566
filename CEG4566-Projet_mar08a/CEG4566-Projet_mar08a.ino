@@ -6,6 +6,7 @@
 #include <Adafruit_SSD1306.h>
 #include <thingProperties.h>
 #include <atomic>
+#include "LittleFS.h"
 
 #undef ERROR
 #include <SparkFun_APDS9960.h>
@@ -62,6 +63,7 @@ std::atomic<bool> ledState{false};
 std::atomic<bool> fanState{false};
 std::atomic<bool> tempAlert{false};
 std::atomic<bool> automaticMode{true};
+std::atomic<int> fanSpeed{0};
 
 // Mutex
 SemaphoreHandle_t i2cMutex, displayMutex, serialMutex, symbolsMutex;
@@ -77,6 +79,7 @@ String readDHTTemperature();
 String readDHTHumidity();
 String processor(const String& var);
 
+/*
 // Ajoutez cette section HTML avant setup()
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
@@ -147,22 +150,34 @@ const char index_html[] PROGMEM = R"rawliteral(
           }
         });
     }
+
+     function setFanState(state) {
+      fetch('/fan?state=' + state)
+        .then(response => response.text())
+        .then(data => location.reload());
+    }
+
+    function setLedState(state) {
+      fetch('/led?state=' + state)
+        .then(response => response.text())
+        .then(data => location.reload());
+    }
   </script>
 </head>
 <body>
   <div class="card">
-    <h1><i class="fas fa-thermometer-half icon"></i>Station Météo Intelligente</h1>
+    <h1><i class="fas fa-thermometer-half icon"></i>Station Meteo Intelligente</h1>
     
     <div class="sensor-data">
       <div class="sensor-item">
         <i class="fas fa-temperature-high" style="color: #059e8a; font-size: 32px;"></i>
-        <h2>Température</h2>
+        <h2>Temperature</h2>
         <p style="font-size: 24px;">%TEMPERATURE% °C</p>
       </div>
       
       <div class="sensor-item">
         <i class="fas fa-tint" style="color: #00add6; font-size: 32px;"></i>
-        <h2>Humidité</h2>
+        <h2>Humidite</h2>
         <p style="font-size: 24px;">%HUMIDITY% %%</p>
       </div>
     </div>
@@ -180,10 +195,26 @@ const char index_html[] PROGMEM = R"rawliteral(
         Mode actuel : <strong>%MODE%</strong>
       </p>
     </div>
+
+    <div style="margin-top: 20px;">
+        <h3>Controle Ventilateur</h3>
+        <button class="button" style="background-color: %FANCOLOR%" 
+          onclick="setFanState('on')">ON</button>
+        <button class="button" style="background-color: #cccccc" 
+          onclick="setFanState('off')">OFF</button>
+    </div>
+
+    <div style="margin-top: 20px;">
+      <h3>Controle LED</h3>
+      <button class="button" style="background-color: %LEDCOLOR%" 
+        onclick="setLedState('on')">ON</button>
+      <button class="button" style="background-color: #cccccc" 
+        onclick="setLedState('off')">OFF</button>
+    </div>
   </div>
 </body>
 </html>)rawliteral";
-
+*/
 
 void setup() {
   Serial.begin(115200);
@@ -253,6 +284,11 @@ void setup() {
     Serial.print(".");
   }
   Serial.println("\nConnecté! IP: " + WiFi.localIP().toString());
+
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+    return;
+  }
 
   setupServer();
   server.begin();
@@ -482,26 +518,156 @@ String processor(const String& var) {
   if(var == "MODE") return automaticMode.load() ? "Automatique" : "Manuel";
   if(var == "AUTOCOLOR") return automaticMode.load() ? "#4CAF50" : "#808080";
   if(var == "MANUALCOLOR") return automaticMode.load() ? "#808080" : "#2196F3";
+  if(var == "FANCOLOR") return fanState.load() ? "#4CAF50" : "#cccccc";
+  if(var == "LEDCOLOR") return ledState.load() ? "#FFD700" : "#cccccc";
   if(var == "TEMPERATURE") return readDHTTemperature();
   if(var == "HUMIDITY") return readDHTHumidity();
   return String();
 }
 
+String currentMode = "Automatic";  // default
 void setupServer() {
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, processor);
+  server.serveStatic("/images", LittleFS, "/images");
+
+  // Serve ESP32 internal web page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+  request->send(LittleFS, "/index.html", "text/html", false, processor);
   });
 
+   server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/style.css", "text/css");
+  });
+
+  // Temperature for external app
+  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", readDHTTemperature());
+  });
+
+  // Humidity for external app
+  server.on("/humidity", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", readDHTHumidity());
+  });
+
+  // Handle mode switching (for ESP32 web interface)
   server.on("/mode", HTTP_GET, [](AsyncWebServerRequest *request){
-    if(request->hasParam("mode")) {
+    if (request->hasParam("mode")) {
       String mode = request->getParam("mode")->value();
+
+      // Appliquer le changement sur la variable logique
       automaticMode.store(mode == "auto");
-      
-      if(automaticMode.load()) {
+
+      // Enregistrer aussi dans currentMode pour l’interface
+      currentMode = mode;
+
+      // Éteindre le ventilateur si on repasse en automatique
+      if (automaticMode.load()) {
         digitalWrite(FAN, LOW);
         fanState.store(false);
       }
+
+      request->send(200, "text/plain", "OK");
+    } else {
+      request->send(400, "text/plain", "Missing mode param");
+    }
+  });
+
+  server.on("/currentmode", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", currentMode);
+});
+
+  // Get LED state and brightness
+  server.on("/led/state", HTTP_GET, [](AsyncWebServerRequest *request){
+    String state = ledState.load() ? "on" : "off";
+    int brightness = ledBrightness.load();
+    request->send(200, "application/json", "{\"state\":\"" + state + "\",\"brightness\":" + brightness + "}");
+  });
+  Serial.println("Route /led/state chargée");
+
+  // ESP32 web UI uses GET for LED toggle
+  server.on("/led", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (request->hasParam("state")) {
+      String state = request->getParam("state")->value();
+      bool on = (state == "on");
+
+      
+      if (on && ledBrightness.load() == 0) {
+        ledBrightness.store(128); // Valeur par défaut
+      }
+
+      analogWrite(LED_PIN, on ? ledBrightness.load() : 0);
+      ledState.store(on);
+
       request->send(200, "text/plain", "OK");
     }
   });
+
+  server.on("/fan/state", HTTP_GET, [](AsyncWebServerRequest *request){
+    String state = fanState.load() ? "on" : "off";
+    int speed = fanSpeed.load();  // use the stored value instead of analogRead
+    request->send(200, "application/json", "{\"state\":\"" + state + "\",\"speed\":" + speed + "}");
+  });
+
+  // ESP32 web UI uses GET for Fan toggle (optional)
+  server.on("/fan", HTTP_GET, [](AsyncWebServerRequest *request){
+    if (request->hasParam("state")) {
+      String state = request->getParam("state")->value();
+      bool on = (state == "on");
+      digitalWrite(FAN, on ? HIGH : LOW);
+      fanState.store(on);
+      request->send(200, "text/plain", "OK");
+    }
+  });
+
+  // External App: Toggle LED (POST)
+  server.on("/led", HTTP_POST, [](AsyncWebServerRequest *request){
+  if (request->hasParam("state", true)) {
+    String state = request->getParam("state", true)->value();
+    bool on = (state == "on");
+
+    if (on && ledBrightness.load() == 0) {
+      ledBrightness.store(128); // Valeur par défaut
+    }
+
+    analogWrite(LED_PIN, on ? ledBrightness.load() : 0);
+    ledState.store(on);
+
+    request->send(200, "text/plain", "LED " + state);
+  }
+});
+
+  // External App: Set LED brightness
+  server.on("/led/intensity", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("value", true)) {
+      int val = request->getParam("value", true)->value().toInt();
+      ledBrightness.store(val);
+      if (ledState.load()) {
+        analogWrite(LED_PIN, val);
+      }
+      request->send(200, "text/plain", "LED Intensity: " + String(val));
+    }
+  });
+
+  // External App: Toggle Fan (POST)
+  server.on("/fan", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("state", true)) {
+      String state = request->getParam("state", true)->value();
+      bool on = (state == "on");
+      digitalWrite(FAN, on ? HIGH : LOW);
+      fanState.store(on);
+      request->send(200, "text/plain", "Fan " + state);
+    }
+  });
+
+  // External App: Set Fan speed
+  server.on("/fan/intensity", HTTP_POST, [](AsyncWebServerRequest *request){
+    if (request->hasParam("value", true)) {
+      int val = request->getParam("value", true)->value().toInt();
+      fanSpeed.store(val);  // store the speed
+      digitalWrite(FAN, val); // using ledcWrite if you're using PWM setup
+      request->send(200, "text/plain", "Fan Intensity: " + String(val));
+    }
+  });
+  
+  server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
+
 }

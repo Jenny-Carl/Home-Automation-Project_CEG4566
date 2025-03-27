@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monitor</title>
+  <link rel="stylesheet" href="monitor.css" />
+  <link href="https://fonts.googleapis.com/css2?family=ABeeZee&display=swap" rel="stylesheet">
+</head>
+<script>
+  const ESP_IP = "http://1xx.xxx.x.x";
+
+  // Fetch Temperature
+  function fetchTemperature() {
+    fetch(`${ESP_IP}/temperature`)
+      .then(response => response.text())
+      .then(temp => {
+        document.getElementById('temp-value').textContent = temp + " °C";
+      })
+      .catch(error => console.error("Temp fetch error:", error));
+  }
+
+  // Fetch Humidity
+  function fetchHumidity() {
+    fetch(`${ESP_IP}/humidity`)
+      .then(response => response.text())
+      .then(hum => {
+        document.getElementById('humidity-value').textContent = hum + " %";
+      })
+      .catch(error => console.error("Humidity fetch error:", error));
+  }
+
+  function syncDeviceState() {
+    // LED
+    fetch(`${ESP_IP}/led/state`)
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("light-toggle").checked = data.state === "on";
+        document.getElementById("brightness").value = data.brightness;
+        document.getElementById("brightness-value").textContent = "Value: " + data.brightness;
+      });
+
+    // FAN
+    fetch(`${ESP_IP}/fan/state`)
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("fan-toggle").checked = data.state === "on";
+        document.getElementById("fan-speed").value = data.speed;
+        document.getElementById("fan-value").textContent = "Value: " + data.speed;
+      });
+  }
+
+  // Toggle Fan or LED ON/OFF
+  function toggleDevice(endpoint, state) {
+    fetch(`${ESP_IP}/${endpoint}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: `state=${state}`
+    })
+    .then(res => res.text())
+    .then(text => console.log(`${endpoint} toggled:`, text))
+    .catch(error => console.error(`${endpoint} toggle error:`, error));
+  }
+  function setMode(mode) {
+    fetch(`${ESP_IP}/mode?mode=${mode.toLowerCase()}`)
+      .then(response => response.text())
+      .then(data => {
+        if (data === "OK") {
+          // Update current mode in UI without reload
+          document.getElementById("currentMode").innerText = capitalizeFirstLetter(mode);
+          updateModeUI(mode.toLowerCase());
+        } else {
+          console.error("Mode change failed:", data);
+        }
+      })
+      .catch(err => console.error("Mode set error:", err));
+  }
+  function updateModeUI(mode) {
+    const autoBtn = document.getElementById("autoBtn");
+    const manualBtn = document.getElementById("manualBtn");
+  
+    if (mode === "auto") {
+      autoBtn.classList.add("active");
+      manualBtn.classList.remove("active");
+    } else {
+      manualBtn.classList.add("active");
+      autoBtn.classList.remove("active");
+    }
+  }
+  function capitalizeFirstLetter(string) {
+    return string.charAt(0).toUpperCase() + string.slice(1);
+  }
+  
+  window.onload = () => {
+    // Real-time toggle events
+    document.getElementById("light-toggle").onchange = (e) => {
+      toggleDevice("led", e.target.checked ? "on" : "off");
+    };
+
+    document.getElementById("fan-toggle").onchange = (e) => {
+      toggleDevice("fan", e.target.checked ? "on" : "off");
+    };
+
+    /* // Initial state fetch
+    fetch(`${ESP_IP}/led/state`)
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("light-toggle").checked = data.state === "on";
+      });
+
+    fetch(`${ESP_IP}/fan/state`)
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("fan-toggle").checked = data.state === "on";
+      }); */
+
+/*     // Live updates
+    setInterval(() => {
+      fetchTemperature();
+      fetchHumidity();
+    }, 3000); */
+
+    setInterval(fetchTemperature, 500);
+    setInterval(fetchHumidity, 500);
+    setInterval(syncDeviceState, 500);
+
+    syncDeviceState();
+    
+    fetch(`${ESP_IP}/currentmode`)
+    .then(res => res.text())
+    .then(mode => {
+      const normalized = mode.toLowerCase();
+      document.getElementById("currentMode").innerText = capitalizeFirstLetter(mode);
+      if (normalized.includes("auto")) updateModeUI("auto");
+      else updateModeUI("manual");
+
+    });
+  };
+</script>
+
+<body>
+  <div class="monitor-container">
+    <div class="overlay"></div>
+
+    <!-- Header -->
+    <div class="header">
+      <img src="images/fleche.png" alt="Back" class="back-icon" onclick="window.location.href='dashboard.html'">
+      <h2>Rooms</h2>
+      <img src="images/user.png" alt="User" class="user-pic">
+    </div>
+
+    <!-- Humidity + Temp Cards -->
+    <div class="status-cards">
+      <div class="status-card">
+        <img src="images/humidity.png" class="status-icon" />
+        <div>
+          <p class="status-value" id="humidity-value">-- %</p>
+          <p class="status-label">Outside Humidity</p>
+        </div>
+      </div>
+
+      <div class="status-card">
+        <img src="images/temp.png" class="status-icon" />
+        <div>
+          <p class="status-value" id="temp-value">-- °C</p>
+          <p class="status-label">Outside temperature</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mode Toggle Section -->
+    <div class="mode-card">
+      <p class="mode-title">Control Mode</p>
+      <div class="mode-button-group">
+        <button id="manualBtn" class="mode-btn" onclick="setMode('manual')">Manual</button>
+        <button id="autoBtn" class="mode-btn" onclick="setMode('auto')">Automatic</button>        
+      </div>
+      <p class="mode-status">Current Mode: <span id="currentMode">--</span></p>
+    </div>
+    
+    <!-- Light Bulb + Fan Controls -->
+    <div class="controls">
+      <!-- Light Control -->
+      <div class="control-card organized-card">
+        <div class="control-header">
+          <img src="images/light.png" class="control-icon" />
+          <p class="control-label">Light Bulb</p>
+        </div>
+
+        <div class="toggle-group">
+          <span class="toggle-text off">OFF</span>
+          <label class="switch">
+            <input type="checkbox" id="light-toggle" />
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-text on">ON</span>
+        </div>
+      </div>
+
+      <!-- Fan Control -->
+      <div class="control-card organized-card">
+        <div class="control-header">
+          <img src="images/fan.png" class="control-icon" />
+          <p class="control-label">Fan</p>
+        </div>
+
+        <div class="toggle-group">
+          <span class="toggle-text off">OFF</span>
+          <label class="switch">
+            <input type="checkbox" id="fan-toggle" />
+            <span class="slider round"></span>
+          </label>
+          <span class="toggle-text on">ON</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Navbar -->
+    <img src="images/navbar.png" class="navbar" />
+  </div>
+</body>
+</html>
