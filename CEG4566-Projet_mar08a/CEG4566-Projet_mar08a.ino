@@ -22,6 +22,7 @@
 #define OLED_HEIGHT 64
 #define OLED_ADDRESS 0x3C
 #define OLED_RESET 4
+#define APDS9960_I2C_ADDR 0x39 // Adresse I2C du capteur de gestes
 
 // Bitmaps PROGMEM
 const unsigned char arrowUpBitmap[] PROGMEM = {0x18,0x3C,0x7E,0xFF,0xFF,0x3C,0x3C,0x3C};
@@ -73,6 +74,7 @@ void introDisplay();
 void dhtTask(void *pvParameters);
 void gestureTask(void *pvParameters);
 void indicatorDisplay(void *pvParameters);
+void checkComponents();
 void autoFanTask(void *pvParameters);
 void setupServer();
 String readDHTTemperature();
@@ -442,6 +444,7 @@ void gestureTask(void *pvParameters) {
 
 void indicatorDisplay(void *pvParameters) {
   uint32_t lastUpdate = 0;
+  uint32_t lastCheck = 0;
   for(;;) {
     if(xSemaphoreTake(displayMutex, pdMS_TO_TICKS(100))) {
       display.clearDisplay();
@@ -482,12 +485,58 @@ void indicatorDisplay(void *pvParameters) {
       display.display();
       xSemaphoreGive(displayMutex);
     }
+
+    // Gestion des temporisations séparées
+    uint32_t currentTime = millis();
     
-    if(millis() - lastUpdate > 5000) {
+    if(currentTime - lastUpdate > 5000) {
       Serial.println("[STATUS] System OK");
       lastUpdate = millis();
     }
+
+     if(currentTime - lastCheck > 10000) {
+      checkComponents();
+      lastCheck = currentTime;
+    }
     vTaskDelay(pdMS_TO_TICKS(500));
+  }
+}
+
+void checkComponents() {
+  bool oledOk = false;
+  bool fanOk = false;
+  bool apdsOk = false;
+
+  // Vérification OLED
+  if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100))) {
+    Wire.beginTransmission(OLED_ADDRESS);
+    oledOk = (Wire.endTransmission() == 0);
+    xSemaphoreGive(i2cMutex);
+  }
+
+  // Vérification Ventilateur
+  int fanStatePin = digitalRead(FAN);
+  bool expectedFanState = fanState.load();
+  fanOk = (fanStatePin == (expectedFanState ? HIGH : LOW));
+
+  // Vérification Capteur Gestes (APDS-9960)
+  if(xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100))) {
+    Wire.beginTransmission(0x39); // Adresse I2C de l'APDS-9960
+    apdsOk = (Wire.endTransmission() == 0);
+    xSemaphoreGive(i2cMutex);
+  }
+
+  // Affichage des résultats
+  if(xSemaphoreTake(serialMutex, pdMS_TO_TICKS(100))) {
+    Serial.println("\n[VERIFICATION COMPOSANTS]");
+    Serial.print("OLED: ");
+    Serial.println(oledOk ? "Fonctionnel" : "ERREUR - Non detecte");
+    Serial.print("Ventilateur: ");
+    Serial.println(fanOk ? "Etat correct" : "ERREUR - Incoherence etat");
+    Serial.print("Capteur Gestes: ");
+    Serial.println(apdsOk ? "Connecte" : "ERREUR - Non detecte");
+    Serial.println();
+    xSemaphoreGive(serialMutex);
   }
 }
 
